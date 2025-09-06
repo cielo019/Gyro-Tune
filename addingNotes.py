@@ -1,12 +1,13 @@
 from pythonosc.dispatcher import Dispatcher
 from pythonosc import osc_server
 import pygame
-import time
+import statistics
+from collections import deque
 
-# 🔊 Initialize pygame mixer
+# 🔊 Initialize pygame
 pygame.mixer.init()
 
-# 🎧 Load musical notes
+# 🎵 Load notes
 notes = {
     'C': pygame.mixer.Sound("note_c.wav"),
     'D': pygame.mixer.Sound("note_d.wav"),
@@ -17,83 +18,87 @@ notes = {
     'B': pygame.mixer.Sound("note_b.wav"),
 }
 
-# Load additional sound effects
-extra_sounds = {
+# 🎶 Effects
+fx = {
     'drum': pygame.mixer.Sound("drum.wav"),
     'effect': pygame.mixer.Sound("effect.wav"),
     'ambient': pygame.mixer.Sound("ambient.wav"),
 }
 
-# Set volumes (0.0 to 1.0)
-for sound in notes.values():
-    sound.set_volume(1.0)
-for sound in extra_sounds.values():
-    sound.set_volume(1.0)
-
-# Use channels to manage sounds
+# Channels
 channel_notes = pygame.mixer.Channel(0)
 channel_fx = pygame.mixer.Channel(1)
 
-# 🎼 Track last played note and ambient
+# State
 last_note = None
-last_ambient_triggered = False
-last_note_time = 0
+ambient_triggered = False
+mode = "notes"
+
+# Smooth values (rolling average)
+window_size = 5
+x_vals, y_vals, z_vals = deque(maxlen=window_size), deque(maxlen=window_size), deque(maxlen=window_size)
 
 def accel_handler(address, x, y, z):
-    global last_note, last_note_time, last_ambient_triggered
+    global last_note, ambient_triggered, mode
 
-    print(f"Accel: x={x:.2f}, y={y:.2f}, z={z:.2f}")
-    current_time = time.time()
+    # Add new values for smoothing
+    x_vals.append(x); y_vals.append(y); z_vals.append(z)
 
-    # 📌 Map X tilt to 7-note scale
-    if x < -0.85:
-        note = 'C'
-    elif x < -0.6:
-        note = 'D'
-    elif x < -0.3:
-        note = 'E'
-    elif x < 0.0:
-        note = 'F'
-    elif x < 0.3:
-        note = 'G'
-    elif x < 0.6:
-        note = 'A'
-    else:
-        note = 'B'
+    # Use average to reduce jitter
+    x = statistics.mean(x_vals)
+    y = statistics.mean(y_vals)
+    z = statistics.mean(z_vals)
 
-    # ✅ Only play note if it's new or after cooldown
-    if note != last_note or current_time - last_note_time > 0.3:
-        print(f"🎵 Playing note: {note}")
-        channel_notes.play(notes[note])
-        last_note = note
-        last_note_time = current_time
+    print(f"Accel: x={x:.2f}, y={y:.2f}, z={z:.2f}, mode={mode}")
 
-    # 🥁 Trigger drum if Z accel exceeds threshold
-    if abs(z) > 1.2:
-        print("🥁 Drum triggered!")
-        channel_fx.play(extra_sounds['drum'])
+    # 🎼 Notes mode (immediate)
+    if mode == "notes":
+        if x < -0.714:
+            note = 'C'
+        elif x < -0.429:
+            note = 'D'
+        elif x < -0.143:
+            note = 'E'
+        elif x < 0.143:
+            note = 'F'
+        elif x < 0.429:
+            note = 'G'
+        elif x < 0.714:
+            note = 'A'
+        else:
+            note = 'B'
 
-    # 🎧 Trigger FX if Y tilt positive
-    if y > 0.6:
-        print("🎧 FX triggered!")
-        channel_fx.play(extra_sounds['effect'])
+        # Play only if note changed
+        if note != last_note:
+            print(f"🎵 Playing {note}")
+            channel_notes.play(notes[note])
+            last_note = note
 
-    # 🌫 Ambient triggered only once when Y < -0.6
-    elif y < -0.6:
-        if not last_ambient_triggered:
-            print("🌫 Ambient triggered!")
-            channel_fx.play(extra_sounds['ambient'])
-            last_ambient_triggered = True
-    else:
-        last_ambient_triggered = False
+        # Drum trigger (instant)
+        if abs(z) > 1.2:
+            print("🥁 Drum!")
+            channel_fx.play(fx['drum'])
 
-# 🧭 OSC Server Setup
+    # 🎧 FX mode (instant)
+    if mode == "fx":
+        if y > 0.6:
+            print("🎧 FX!")
+            channel_fx.play(fx['effect'])
+        elif y < -0.6 and not ambient_triggered:
+            print("🌫 Ambient!")
+            channel_fx.play(fx['ambient'])
+            ambient_triggered = True
+        elif -0.6 <= y <= 0.6:
+            ambient_triggered = False
+
+
+# 🧭 OSC setup
 dispatcher = Dispatcher()
 dispatcher.map("/accel", accel_handler)
 
 ip = "0.0.0.0"
 port = 10000
 
-print(f"🎧 Listening for motion on {ip}:{port} ...")
+print(f"🎧 Listening on {ip}:{port}...")
 server = osc_server.ThreadingOSCUDPServer((ip, port), dispatcher)
 server.serve_forever()
